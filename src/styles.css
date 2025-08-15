@@ -1,0 +1,19 @@
+/* src/styles.css */
+:root {
+  --bg: #121314;
+  --text: #e9eaee;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Arial, sans-serif;
+}
+
+/* Optional helpers (safe to keep) */
+.container { max-width: 1152px; margin: 0 auto; padding: 16px 20px; }
+.hidden { display: none !important; }

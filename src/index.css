@@ -1,0 +1,21 @@
+/* Remove the default width/padding constraints */
+:root {}
+
+/* Make the root fill the screen */
+#root {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Page look */
+html, body {
+  height: 100%;
+}
+body {
+  margin: 0;
+  background: #111;
+  color: #eee;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
