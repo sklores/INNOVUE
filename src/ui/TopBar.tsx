@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { API_KEY, SPREADSHEET_ID, SHEET_NAME } from "../lib/sheets";
 
-/** -------- Weather (Open‑Meteo) for DC (20006-ish) -------- */
+/** Weather for DC (20006-ish) */
 const LAT = 38.9;
 const LON = -77.04;
 
@@ -42,7 +42,7 @@ function buildWavePath({
   return pts.join(" ");
 }
 
-/** Pick first working image from candidates */
+/** Probe a list of image URLs; use the first that loads */
 function useFirstWorkingImage(candidates: string[]): string | null {
   const [src, setSrc] = useState<string | null>(null);
   const list = useMemo(() => candidates.filter(Boolean), [candidates]);
@@ -67,7 +67,7 @@ function useFirstWorkingImage(candidates: string[]): string | null {
   return src;
 }
 
-/** Big, animated sun / moon */
+/** Big sun / moon */
 const BigSun = ({ size = 56 }: { size?: number }) => (
   <svg
     className="sun spin"
@@ -113,8 +113,6 @@ const BigMoon = ({ size = 56 }: { size?: number }) => (
   </svg>
 );
 
-/* ========================================================= */
-
 export default function TopBar() {
   const [wx, setWx] = useState<{ temp: number; label: string; time: string } | null>(null);
 
@@ -126,13 +124,13 @@ export default function TopBar() {
   ]);
 
   // wave state
-  const [amp, setAmp] = useState(10);
+  const [amp, setAmp] = useState(12);
   const [period, setPeriod] = useState(220);
   const barRef = useRef<HTMLDivElement | null>(null);
   const [barW, setBarW] = useState(1200);
-  const [barH, setBarH] = useState(112); // thicker default
+  const [barH, setBarH] = useState(104);
 
-  // Day / night (update minute)
+  // Day / night
   const [isDay, setIsDay] = useState<boolean>(() => {
     const h = new Date().getHours();
     return h >= 6 && h < 18;
@@ -183,24 +181,20 @@ export default function TopBar() {
         const sales = asNumber(r[1]) ?? 0;   // B2
         const green = asNumber(r[2]) ?? 100; // C2
         const red = asNumber(r[3]) ?? 0;     // D2
-
         const denom = (green - red) || 1;
         let t = (sales - red) / denom; // 0=red, 1=green
         t = Math.max(0, Math.min(1, t));
         const eased = 1 - Math.pow(1 - t, 2);
-
-        const minAmp = 6;
-        const maxAmp = 28;
+        const minAmp = 7, maxAmp = 30;
         const nextAmp = Math.round(minAmp + eased * (maxAmp - minAmp));
-        const nextPeriod = 190 + Math.round((1 - t) * 90);
-
+        const nextPeriod = 180 + Math.round((1 - t) * 90);
         if (alive) { setAmp(nextAmp); setPeriod(nextPeriod); }
-      } catch { /* keep defaults */ }
+      } catch {}
     })();
     return () => { alive = false; };
   }, []);
 
-  // resize -> recompute svg viewBox
+  // resize
   useEffect(() => {
     const recalc = () => {
       if (!barRef.current) return;
@@ -215,23 +209,22 @@ export default function TopBar() {
     return () => { ro.disconnect(); window.removeEventListener("resize", recalc); };
   }, []);
 
-  // Adjusted baseline range for thicker bar
-  const baseline = Math.max(60, Math.min(92, Math.round(barH * 0.66)));
+  const baseline = Math.max(54, Math.min(80, Math.round(barH * 0.66)));
   const pathBack  = buildWavePath({ width: barW * 2, height: barH, amp, baseline, period });
-  const pathFront = buildWavePath({ width: barW * 2, height: barH, amp: Math.max(4, amp - 4), baseline: baseline + 4, period: period * 0.9 });
+  const pathFront = buildWavePath({ width: barW * 2, height: barH, amp: Math.max(5, amp - 4), baseline: baseline + 5, period: period * 0.9 });
 
-  /* -------------------- styles (updated for size) -------------------- */
   const css = `
     .topbar {
       position: relative;
       background: #2A5376;
       color:#fff;
       width:100%;
-      height: 112px;                 /* thicker */
+      height: 104px;
       display:flex; align-items:center;
       overflow:hidden;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
     }
-    @media (max-width: 640px) { .topbar { height: 100px; } }
+    @media (max-width: 640px) { .topbar { height: 96px; } }
 
     .wave-wrap { position:absolute; inset:0; pointer-events:none; overflow:hidden; }
     .wave-svg { position:absolute; top:0; left:0; width:200%; height:100%; animation: waveSlide 18s linear infinite; }
@@ -241,102 +234,88 @@ export default function TopBar() {
     .topbar-grid {
       position:relative; z-index:2;
       width:100%; max-width:1200px; margin:0 auto;
-      padding: 8px 14px;             /* a touch more inner padding */
+      padding: 6px 12px 2px;
       display:grid;
-      grid-template-columns: 1fr auto 1fr; /* left | center | right */
-      align-items:center; gap:12px;
+      grid-template-columns: 1fr auto 1fr;
+      align-items:end; gap:12px;
     }
 
-    .brand { display:flex; align-items:center; gap:12px; min-width:0; }
-    .brand img { width:40px; height:40px; border-radius:8px; object-fit:cover; }
-    .brand-name {
-      font-weight:800; line-height:1.05;
-      font-size: clamp(18px, 4vw, 24px);
-      letter-spacing: .3px;
-      word-break:break-word;
-      text-shadow: 0 1px 2px rgba(0,0,0,.35);
-    }
+    .brand { display:flex; align-items:center; gap:10px; min-width:0; }
+    .brand img { width:38px; height:38px; border-radius:8px; object-fit:cover; }
+    .brand-name { font-weight:800; line-height:1.05; font-size: clamp(14px, 4.2vw, 20px); white-space:nowrap; text-shadow: 0 1px 2px rgba(0,0,0,.35); }
 
     .center-logo { display:flex; align-items:center; justify-content:center; }
-    .center-logo img {
-      height: clamp(84px, 11.5vw, 120px);  /* BIGGER logo */
-      width:auto;
-      border-radius:14px;
-      filter: drop-shadow(0 2px 6px rgba(0,0,0,.25));
-      image-rendering: -webkit-optimize-contrast;
-      image-rendering: crisp-edges;
-    }
+    .center-logo img { height: clamp(70px, 12vw, 100px); width:auto; filter: drop-shadow(0 2px 6px rgba(0,0,0,.25)); }
 
-    .right { display:flex; align-items:flex-start; justify-content:flex-end; gap:12px; min-width:0; }
-    .sky { margin-top: -10px; }
+    .right { display:flex; align-items:flex-end; justify-content:flex-end; gap:10px; min-width:0; }
+    .sky { align-self:flex-start; margin-top:-12px; }
     .spin { animation: spin 40s linear infinite; transform-origin: 50% 50%; }
     @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     .bob { animation: bob 4.6s ease-in-out infinite; transform-origin: 50% 50%; }
     @keyframes bob { 0% { transform: translateY(0px); } 50% { transform: translateY(-6px); } 100% { transform: translateY(0px); } }
 
-    .wx {
-      text-align:right; display:flex; flex-direction:column; gap:2px; min-width:0;
-      font-size: clamp(12px, 2.8vw, 15px);
-      text-shadow: 0 1px 2px rgba(0,0,0,.35);
-    }
+    .wx { text-align:right; display:flex; flex-direction:column; gap:2px; min-width:0;
+          font-size: clamp(11px, 2.7vw, 14px); text-shadow: 0 1px 2px rgba(0,0,0,.35);
+          align-self:flex-end; margin-bottom:2px; }
     .wx .line1 { font-weight:800; }
 
-    @media (max-width: 420px) {
-      .brand-name { display:none; }
-      .brand img { width:34px; height:34px; }
-      .center-logo img { height: 96px; }   /* still large on very small screens */
-      .sky { margin-top: -6px; }
-    }
+    /* tighten the gap below the bar */
+    .afterTopBar { height: 8px; }
   `;
 
   return (
-    <div className="topbar" ref={barRef}>
-      <style>{css}</style>
+    <>
+      <div className="topbar" ref={barRef}>
+        <style>{css}</style>
 
-      {/* Waves behind all content */}
-      <div className="wave-wrap" aria-hidden>
-        <svg className="wave-svg back" viewBox={`0 0 ${barW * 2} ${barH}`} preserveAspectRatio="none">
-          <defs>
-            <linearGradient id="grad-back" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#244B6B" />
-              <stop offset="100%" stopColor="#1E3F59" />
-            </linearGradient>
-          </defs>
-          <path d={pathBack} fill="url(#grad-back)" />
-        </svg>
-        <svg className="wave-svg front" viewBox={`0 0 ${barW * 2} ${barH}`} preserveAspectRatio="none">
-          <defs>
-            <linearGradient id="grad-front" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#2E5E85" />
-              <stop offset="100%" stopColor="#254C6B" />
-            </linearGradient>
-          </defs>
-          <path d={pathFront} fill="url(#grad-front)" />
-        </svg>
-      </div>
-
-      {/* Foreground content */}
-      <div className="topbar-grid">
-        {/* Left: venue */}
-        <div className="brand">
-          <img src={venueLogo} alt="Venue" />
-          <div className="brand-name">GCDC</div> {/* renamed */}
+        {/* Waves */}
+        <div className="wave-wrap" aria-hidden>
+          <svg className="wave-svg back" viewBox={`0 0 ${barW * 2} ${barH}`} preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="grad-back" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#244B6B" />
+                <stop offset="100%" stopColor="#1E3F59" />
+              </linearGradient>
+            </defs>
+            <path d={pathBack} fill="url(#grad-back)" />
+          </svg>
+          <svg className="wave-svg front" viewBox={`0 0 ${barW * 2} ${barH}`} preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="grad-front" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#2E5E85" />
+                <stop offset="100%" stopColor="#254C6B" />
+              </linearGradient>
+            </defs>
+            <path d={pathFront} fill="url(#grad-front)" />
+          </svg>
         </div>
 
-        {/* Center: InnoVue logo (bigger) */}
-        <div className="center-logo">
-          {innovueLogo ? <img src={innovueLogo} alt="InnoVue" /> : <div style={{height:100,width:100}} />}
-        </div>
+        {/* Foreground */}
+        <div className="topbar-grid">
+          {/* Left */}
+          <div className="brand">
+            <img src={venueLogo} alt="Venue" />
+            <div className="brand-name">GCDC</div>
+          </div>
 
-        {/* Right: big sky icon + weather/time */}
-        <div className="right">
-          <div className="sky" aria-hidden>{isDay ? <BigSun /> : <BigMoon />}</div>
-          <div className="wx">
-            <div className="line1">{wx ? `${wx.temp}°F ${wx.label}` : "—"}</div>
-            <div className="line2">{wx ? wx.time : ""}</div>
+          {/* Center */}
+          <div className="center-logo">
+            {innovueLogo ? <img src={innovueLogo} alt="InnoVue" /> : <div style={{height:80,width:80}} />}
+          </div>
+
+          {/* Right */}
+          <div className="right">
+            <div className="sky" aria-hidden>{isDay ? <BigSun /> : <BigMoon />}</div>
+            <div className="wx">
+              <div className="line1">{wx ? `${wx.temp}°F ${wx.label}` : "—"}</div>
+              <div className="line2">{wx ? wx.time : ""}</div>
+            </div>
           </div>
         </div>
       </div>
-    </div>
+
+      {/* small spacer, tighter than before */}
+      <div className="afterTopBar" />
+    </>
   );
 }
