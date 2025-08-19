@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { API_KEY, SPREADSHEET_ID, SHEET_NAME } from "../lib/sheets";
 
-/** Open‑Meteo (no API key) for ZIP 20006 (approx lat/lon) */
-const LAT = 38.900;
-const LON = -77.040;
+/** -------- Weather (Open‑Meteo) for DC (20006-ish) -------- */
+const LAT = 38.9;
+const LON = -77.04;
 
 function labelFromCode(code: number): string {
   const map: Record<number, string> = {
@@ -16,11 +17,35 @@ function labelFromCode(code: number): string {
   return map[code] ?? "—";
 }
 
-/** Probe a list of image URLs; use the first that loads */
+const asNumber = (x: unknown) => {
+  if (x == null) return null;
+  let s = String(x).trim();
+  const parenNeg = /^\s*\(.*\)\s*$/.test(s);
+  if (parenNeg) s = s.replace(/[()]/g, "");
+  s = s.replace(/\$/g, "").replace(/,/g, "").replace(/[^\d.\-]/g, "");
+  if (!s || s === "-" || s === "." || s === "-.") return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? (parenNeg ? -n : n) : null;
+};
+
+/** Build a sine wave path to fill under a curve */
+function buildWavePath({
+  width, height, amp, baseline, period = 200, step = 10,
+}: { width: number; height: number; amp: number; baseline: number; period?: number; step?: number; }) {
+  const pts: string[] = [];
+  pts.push(`M 0 ${baseline}`);
+  for (let x = 0; x <= width + step; x += step) {
+    const y = baseline + amp * Math.sin((2 * Math.PI * x) / period);
+    pts.push(`L ${x} ${y.toFixed(2)}`);
+  }
+  pts.push(`L ${width} ${height}`, `L 0 ${height} Z`);
+  return pts.join(" ");
+}
+
+/** Pick first working image from candidates */
 function useFirstWorkingImage(candidates: string[]): string | null {
   const [src, setSrc] = useState<string | null>(null);
   const list = useMemo(() => candidates.filter(Boolean), [candidates]);
-
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -32,38 +57,95 @@ function useFirstWorkingImage(candidates: string[]): string | null {
             img.onerror = reject;
             img.src = url;
           });
-          if (!cancelled) {
-            setSrc(url);
-          }
+          if (!cancelled) setSrc(url);
           break;
-        } catch {
-          /* try next */
-        }
+        } catch {}
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [list]);
-
   return src;
 }
+
+/** Big, animated sun / moon */
+const BigSun = ({ size = 56 }: { size?: number }) => (
+  <svg
+    className="sun spin"
+    width={size} height={size} viewBox="0 0 64 64" aria-hidden
+    style={{ filter: "drop-shadow(0 3px 8px rgba(255,190,50,.6))" }}
+  >
+    <defs>
+      <radialGradient id="sunCore" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stopColor="#FFE58A" />
+        <stop offset="60%" stopColor="#FFC94A" />
+        <stop offset="100%" stopColor="#FFB120" />
+      </radialGradient>
+    </defs>
+    <circle cx="32" cy="32" r="14" fill="url(#sunCore)" />
+    {[...Array(12)].map((_, i) => {
+      const a = (i * Math.PI * 2) / 12;
+      const x1 = 32 + Math.cos(a) * 20;
+      const y1 = 32 + Math.sin(a) * 20;
+      const x2 = 32 + Math.cos(a) * 28;
+      const y2 = 32 + Math.sin(a) * 28;
+      return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="#FFD467" strokeWidth="3" strokeLinecap="round" />;
+    })}
+  </svg>
+);
+
+const BigMoon = ({ size = 56 }: { size?: number }) => (
+  <svg
+    className="moon bob"
+    width={size} height={size} viewBox="0 0 64 64" aria-hidden
+    style={{ filter: "drop-shadow(0 3px 8px rgba(150,180,255,.55))" }}
+  >
+    <defs>
+      <radialGradient id="moonCore" cx="35%" cy="35%" r="70%">
+        <stop offset="0%" stopColor="#F0F4FF" />
+        <stop offset="70%" stopColor="#C9D2F6" />
+        <stop offset="100%" stopColor="#B0BCEB" />
+      </radialGradient>
+    </defs>
+    <path d="M42 50a18 18 0 1 1-14-32 16 16 0 1 0 14 32z" fill="url(#moonCore)" />
+    <circle cx="28" cy="30" r="3" fill="#AAB6E4" opacity=".6" />
+    <circle cx="36" cy="38" r="2.5" fill="#AAB6E4" opacity=".6" />
+    <circle cx="23" cy="40" r="2" fill="#AAB6E4" opacity=".5" />
+  </svg>
+);
+
+/* ========================================================= */
 
 export default function TopBar() {
   const [wx, setWx] = useState<{ temp: number; label: string; time: string } | null>(null);
 
-  // Venue logo: you said it's public/gcdc.jpg ➜ reference as /gcdc.jpg
+  // images
   const venueLogo = "/gcdc.jpg";
-
-  // InnoVue logo fallbacks (pick whichever exists in your repo)
   const innovueLogo = useFirstWorkingImage([
-    "/innovue.svg",
-    "/innovue.png",
-    "/innovue-logo.png",
-    "/assets/innovue.svg",
-    "/assets/innovue.png",
+    "/innovue.svg", "/innovue.png", "/innovue-logo.png",
+    "/assets/innovue.svg", "/assets/innovue.png",
   ]);
 
+  // wave state
+  const [amp, setAmp] = useState(10);
+  const [period, setPeriod] = useState(220);
+  const barRef = useRef<HTMLDivElement | null>(null);
+  const [barW, setBarW] = useState(1200);
+  const [barH, setBarH] = useState(112); // thicker default
+
+  // Day / night (update minute)
+  const [isDay, setIsDay] = useState<boolean>(() => {
+    const h = new Date().getHours();
+    return h >= 6 && h < 18;
+  });
+  useEffect(() => {
+    const t = setInterval(() => {
+      const h = new Date().getHours();
+      setIsDay(h >= 6 && h < 18);
+    }, 60_000);
+    return () => clearInterval(t);
+  }, []);
+
+  // weather
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -82,96 +164,177 @@ export default function TopBar() {
           minute: "2-digit",
         });
         setWx({ temp, label, time });
-      } catch {
-        if (alive) setWx(null);
-      }
+      } catch { if (alive) setWx(null); }
     })();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, []);
 
+  // sales -> wave amplitude
+  useEffect(() => {
+    let alive = true;
+    const encoded = encodeURIComponent(`${SHEET_NAME}!A2:D2`);
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${encoded}?key=${API_KEY}`;
+    (async () => {
+      try {
+        const res = await fetch(url, { cache: "no-store" });
+        if (!res.ok) throw new Error("Sheets fetch failed");
+        const json = await res.json();
+        const r: string[] = (json.values && json.values[0]) || [];
+        const sales = asNumber(r[1]) ?? 0;   // B2
+        const green = asNumber(r[2]) ?? 100; // C2
+        const red = asNumber(r[3]) ?? 0;     // D2
+
+        const denom = (green - red) || 1;
+        let t = (sales - red) / denom; // 0=red, 1=green
+        t = Math.max(0, Math.min(1, t));
+        const eased = 1 - Math.pow(1 - t, 2);
+
+        const minAmp = 6;
+        const maxAmp = 28;
+        const nextAmp = Math.round(minAmp + eased * (maxAmp - minAmp));
+        const nextPeriod = 190 + Math.round((1 - t) * 90);
+
+        if (alive) { setAmp(nextAmp); setPeriod(nextPeriod); }
+      } catch { /* keep defaults */ }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  // resize -> recompute svg viewBox
+  useEffect(() => {
+    const recalc = () => {
+      if (!barRef.current) return;
+      const rect = barRef.current.getBoundingClientRect();
+      setBarW(Math.max(600, Math.round(rect.width)));
+      setBarH(Math.round(rect.height));
+    };
+    recalc();
+    const ro = new ResizeObserver(recalc);
+    if (barRef.current) ro.observe(barRef.current);
+    window.addEventListener("resize", recalc);
+    return () => { ro.disconnect(); window.removeEventListener("resize", recalc); };
+  }, []);
+
+  // Adjusted baseline range for thicker bar
+  const baseline = Math.max(60, Math.min(92, Math.round(barH * 0.66)));
+  const pathBack  = buildWavePath({ width: barW * 2, height: barH, amp, baseline, period });
+  const pathFront = buildWavePath({ width: barW * 2, height: barH, amp: Math.max(4, amp - 4), baseline: baseline + 4, period: period * 0.9 });
+
+  /* -------------------- styles (updated for size) -------------------- */
   const css = `
     .topbar {
-      background:#2A5376;            /* lighthouse blue */
+      position: relative;
+      background: #2A5376;
       color:#fff;
       width:100%;
-      padding: 6px 12px;              /* keep bar height tight */
+      height: 112px;                 /* thicker */
+      display:flex; align-items:center;
+      overflow:hidden;
     }
+    @media (max-width: 640px) { .topbar { height: 100px; } }
+
+    .wave-wrap { position:absolute; inset:0; pointer-events:none; overflow:hidden; }
+    .wave-svg { position:absolute; top:0; left:0; width:200%; height:100%; animation: waveSlide 18s linear infinite; }
+    .wave-svg.front { animation-duration: 12s; opacity: .9; }
+    @keyframes waveSlide { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
+
     .topbar-grid {
+      position:relative; z-index:2;
+      width:100%; max-width:1200px; margin:0 auto;
+      padding: 8px 14px;             /* a touch more inner padding */
       display:grid;
-      grid-template-columns: 1fr auto 1fr;  /* left | center | right */
-      align-items:center;
-      gap:12px;
-      max-width:1200px;
-      margin:0 auto;
+      grid-template-columns: 1fr auto 1fr; /* left | center | right */
+      align-items:center; gap:12px;
     }
 
-    /* Left: venue brand */
-    .brand {
-      display:flex; align-items:center; gap:10px; min-width:0;
-    }
-    .brand img {
-      width:36px; height:36px; border-radius:8px; object-fit:cover; flex:0 0 auto;
-    }
+    .brand { display:flex; align-items:center; gap:12px; min-width:0; }
+    .brand img { width:40px; height:40px; border-radius:8px; object-fit:cover; }
     .brand-name {
-      font-weight:700;
-      line-height:1.05;
-      font-size: clamp(13px, 3.3vw, 18px);
+      font-weight:800; line-height:1.05;
+      font-size: clamp(18px, 4vw, 24px);
+      letter-spacing: .3px;
       word-break:break-word;
+      text-shadow: 0 1px 2px rgba(0,0,0,.35);
     }
 
-    /* Center: InnoVue lighthouse — bigger & crisp without raising bar height */
     .center-logo { display:flex; align-items:center; justify-content:center; }
     .center-logo img {
-      height: clamp(68px, 11vw, 96px);  /* larger range than before */
+      height: clamp(84px, 11.5vw, 120px);  /* BIGGER logo */
       width:auto;
-      border-radius:14px;               /* subtle rounding if PNG has a box */
-      background: transparent;          /* no heavy white tile */
-      padding:0;                        /* let the image breathe */
+      border-radius:14px;
       filter: drop-shadow(0 2px 6px rgba(0,0,0,.25));
       image-rendering: -webkit-optimize-contrast;
       image-rendering: crisp-edges;
     }
 
-    /* Right: weather/time */
+    .right { display:flex; align-items:flex-start; justify-content:flex-end; gap:12px; min-width:0; }
+    .sky { margin-top: -10px; }
+    .spin { animation: spin 40s linear infinite; transform-origin: 50% 50%; }
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    .bob { animation: bob 4.6s ease-in-out infinite; transform-origin: 50% 50%; }
+    @keyframes bob { 0% { transform: translateY(0px); } 50% { transform: translateY(-6px); } 100% { transform: translateY(0px); } }
+
     .wx {
       text-align:right; display:flex; flex-direction:column; gap:2px; min-width:0;
-      font-size: clamp(11px, 2.6vw, 14px);
+      font-size: clamp(12px, 2.8vw, 15px);
+      text-shadow: 0 1px 2px rgba(0,0,0,.35);
     }
-    .wx .line1 { font-weight:700; }
+    .wx .line1 { font-weight:800; }
 
-    /* Ultra-narrow phones: keep center dominant */
     @media (max-width: 420px) {
-      .brand-name { display:none; }           /* hide text, keep icon */
-      .brand img { width:32px; height:32px; }
-      .wx { font-size: 12px; }
+      .brand-name { display:none; }
+      .brand img { width:34px; height:34px; }
+      .center-logo img { height: 96px; }   /* still large on very small screens */
+      .sky { margin-top: -6px; }
     }
   `;
 
   return (
-    <div className="topbar">
+    <div className="topbar" ref={barRef}>
       <style>{css}</style>
+
+      {/* Waves behind all content */}
+      <div className="wave-wrap" aria-hidden>
+        <svg className="wave-svg back" viewBox={`0 0 ${barW * 2} ${barH}`} preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="grad-back" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#244B6B" />
+              <stop offset="100%" stopColor="#1E3F59" />
+            </linearGradient>
+          </defs>
+          <path d={pathBack} fill="url(#grad-back)" />
+        </svg>
+        <svg className="wave-svg front" viewBox={`0 0 ${barW * 2} ${barH}`} preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="grad-front" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#2E5E85" />
+              <stop offset="100%" stopColor="#254C6B" />
+            </linearGradient>
+          </defs>
+          <path d={pathFront} fill="url(#grad-front)" />
+        </svg>
+      </div>
+
+      {/* Foreground content */}
       <div className="topbar-grid">
-        {/* Left */}
+        {/* Left: venue */}
         <div className="brand">
           <img src={venueLogo} alt="Venue" />
-          <div className="brand-name">Grilled Cheese Bar</div>
+          <div className="brand-name">GCDC</div> {/* renamed */}
         </div>
 
-        {/* Center */}
+        {/* Center: InnoVue logo (bigger) */}
         <div className="center-logo">
-          {innovueLogo ? (
-            <img src={innovueLogo} alt="InnoVue" />
-          ) : (
-            <div style={{ height: 80, width: 80 }} />
-          )}
+          {innovueLogo ? <img src={innovueLogo} alt="InnoVue" /> : <div style={{height:100,width:100}} />}
         </div>
 
-        {/* Right */}
-        <div className="wx">
-          <div className="line1">{wx ? `${wx.temp}°F ${wx.label}` : "—"}</div>
-          <div className="line2">{wx ? wx.time : ""}</div>
+        {/* Right: big sky icon + weather/time */}
+        <div className="right">
+          <div className="sky" aria-hidden>{isDay ? <BigSun /> : <BigMoon />}</div>
+          <div className="wx">
+            <div className="line1">{wx ? `${wx.temp}°F ${wx.label}` : "—"}</div>
+            <div className="line2">{wx ? wx.time : ""}</div>
+          </div>
         </div>
       </div>
     </div>

@@ -1,22 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { API_KEY, SPREADSHEET_ID, SHEET_NAME } from "./lib/sheets";
+import SalesPanel from "./panels/SalesPanel";
 
-/**
- * Read A2:G17:
- * - KPIs (9 tiles) from rows: 0..5, 8, 9, 10  => A2..A7, A10..A12
- *   For each KPI row, we use:
- *     A = label, B = value, C = greenAt, D = redAt, F = unit
- * - Marquee text:
- *     B8  = rows[6][1]  (Questions)
- *     B9  = rows[7][1]  (Reviews)
- *     B15 = rows[13][1] (Banking)
- *     B16 = rows[14][1] (Social)
- *     B17 = rows[15][1] (News)
- * - Speed control: G12 = rows[10][6] (1–100; higher = slower)
- */
+/** Sheets window: A2:G17 (KPIs from rows 0..5,8,9,10; marquee B8,B9,B15,B16,B17; speed G12) */
 const RANGE_LOCAL = "A2:G17";
 
 type LoadState = "idle" | "loading" | "ok" | "error";
+type View = "Day" | "Week" | "Month";
 
 const CONFIG = {
   fallbackLabels: [
@@ -34,29 +24,24 @@ const CONFIG = {
   defaultRedAt: 0,
 };
 
-function apiUrl() {
-  const encoded = encodeURIComponent(`${SHEET_NAME}!${RANGE_LOCAL}`);
-  return `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${encoded}?key=${API_KEY}`;
-}
-
 const asNumber = (x: unknown) => {
   if (x == null) return null;
   let s = String(x).trim();
   if (!s || s === "—" || s === "--") return null;
-  const isPercent = s.includes("%");
-  let negative = false;
-  if (/^\s*\(.*\)\s*$/.test(s)) {
-    negative = true;
-    s = s.replace(/[()]/g, "");
-  }
+  const parenNeg = /^\s*\(.*\)\s*$/.test(s);
+  if (parenNeg) s = s.replace(/[()]/g, "");
   s = s.replace(/\$/g, "").replace(/,/g, "").replace(/[^\d.\-]/g, "");
   if (!s || s === "-" || s === "." || s === "-.") return null;
   const n = Number(s);
   if (!Number.isFinite(n)) return null;
-  return negative ? -n : n * 1 + (isPercent ? 0 : 0);
+  return parenNeg ? -n : n;
 };
 
-function valueToColorByTargets(value: number | null, greenAt: number, redAt: number) {
+function valueToColorByTargets(
+  value: number | null,
+  greenAt: number,
+  redAt: number
+) {
   if (value == null) return "#5b5b5b";
   const G = Number.isFinite(greenAt) ? greenAt : CONFIG.defaultGreenAt;
   const R = Number.isFinite(redAt) ? redAt : CONFIG.defaultRedAt;
@@ -67,11 +52,11 @@ function valueToColorByTargets(value: number | null, greenAt: number, redAt: num
   return `hsl(${hue}, 70%, 45%)`;
 }
 
-/** Format per unit token from col F: "$", "%", or blank */
+/** "$" | "%" | "" — no decimals for $ and plain */
 function formatByUnit(n: number | null, unitToken?: string) {
   if (n == null) return "—";
-  const u = (unitToken || "").trim();
-  if (u === "$" || u.toLowerCase() === "usd" || u.toLowerCase() === "dollar") {
+  const u = (unitToken || "").trim().toLowerCase();
+  if (u === "$" || u === "usd" || u === "dollar") {
     return new Intl.NumberFormat("en-US", {
       style: "currency",
       currency: "USD",
@@ -79,63 +64,66 @@ function formatByUnit(n: number | null, unitToken?: string) {
       maximumFractionDigits: 0,
     }).format(n);
   }
-  if (u === "%") {
-    return `${Math.round(n)}%`;
-  }
-  // default = plain integer (no decimals)
+  if (u === "%") return `${Math.round(n)}%`;
   return String(Math.round(n));
 }
 
-/** Single smooth marquee (no long pause; slower by default). */
-function Marquee({ text, speedSec = 60 }: { text: string; speedSec?: number }) {
+/** Single seamless marquee (slow; speed from G12) */
+function Marquee({
+  text,
+  speedSec = 80,
+}: {
+  text: string;
+  speedSec?: number;
+}) {
   if (!text?.trim()) return null;
-
-  const styleTag = `
-    @keyframes innovue_marquee_loop {
-      0%   { transform: translateX(0%); }
-      100% { transform: translateX(-100%); }
-    }
-  `;
-
-  // We render two identical lanes back-to-back for seamless scroll
-  const shell: React.CSSProperties = {
-    marginTop: 12,
-    borderRadius: 14,
-    background: "#0d2a48",
-    color: "#fff",
-    boxShadow: "0 2px 10px rgba(0,0,0,0.18)",
-    overflow: "hidden",
-  };
-
-  const trackWrap: React.CSSProperties = {
-    position: "relative",
-    overflow: "hidden",
-    padding: "12px 0",
-  };
-
-  const lane: React.CSSProperties = {
-    display: "inline-block",
-    whiteSpace: "nowrap",
-    paddingRight: "80px",
-    fontSize: 16,
-    fontWeight: 600,
-    letterSpacing: 0.2,
-  };
-
-  const scroller: React.CSSProperties = {
-    display: "inline-block",
-    whiteSpace: "nowrap",
-    willChange: "transform",
-    animation: `innovue_marquee_loop ${speedSec}s linear infinite`,
-  };
-
   return (
-    <div style={shell}>
-      <style>{styleTag}</style>
-      <div style={trackWrap}>
-        <div style={scroller}>
-          <span style={lane}>{text}</span>
-          <span style={lane}>{text}</span>
+    <div
+      style={{
+        marginTop: 12,
+        borderRadius: 14,
+        background: "#0d2a48",
+        color: "#fff",
+        boxShadow: "0 2px 10px rgba(0,0,0,0.18)",
+        overflow: "hidden",
+      }}
+    >
+      <style>
+        {`@keyframes innovue_marquee_loop { 0%{transform:translateX(0%)} 100%{transform:translateX(-100%)} }`}
+      </style>
+      <div style={{ position: "relative", overflow: "hidden", padding: "12px 0" }}>
+        <div
+          style={{
+            display: "inline-block",
+            whiteSpace: "nowrap",
+            willChange: "transform",
+            animation: `innovue_marquee_loop ${speedSec}s linear infinite`,
+          }}
+        >
+          <span
+            style={{
+              display: "inline-block",
+              paddingRight: 80,
+              whiteSpace: "nowrap",
+              fontSize: 16,
+              fontWeight: 600,
+              letterSpacing: 0.2,
+            }}
+          >
+            {text}
+          </span>
+          <span
+            style={{
+              display: "inline-block",
+              paddingRight: 80,
+              whiteSpace: "nowrap",
+              fontSize: 16,
+              fontWeight: 600,
+              letterSpacing: 0.2,
+            }}
+          >
+            {text}
+          </span>
         </div>
       </div>
     </div>
@@ -147,17 +135,22 @@ export default function Dashboard() {
   const [statusMsg, setStatusMsg] = useState("");
   const [lastSync, setLastSync] = useState<Date | null>(null);
 
+  const [rangeView, setRangeView] = useState<View>("Day");
+
   // KPI state
   const [labels, setLabels] = useState<string[]>(CONFIG.fallbackLabels);
-  const [values, setValues] = useState<(number | null)[]>(Array(9).fill(null));
+  const [values, setValues] = useState<(number | null)[]>(
+    Array(9).fill(null)
+  );
   const [greens, setGreens] = useState<number[]>(
     Array(9).fill(CONFIG.defaultGreenAt)
   );
-  const [reds, setReds] = useState<number[]>(Array(9).fill(CONFIG.defaultRedAt));
-  const [units, setUnits] = useState<string[]>(Array(9).fill("")); // <-- from column F
-  const [errors, setErrors] = useState<(string | null)[]>(Array(9).fill(null));
+  const [reds, setReds] = useState<number[]>(
+    Array(9).fill(CONFIG.defaultRedAt)
+  );
+  const [units, setUnits] = useState<string[]>(Array(9).fill(""));
 
-  // Default: ALL options selected
+  // Marquee pick + texts + speed
   const [pick, setPick] = useState({
     questions: true,
     reviews: true,
@@ -165,11 +158,8 @@ export default function Dashboard() {
     social: true,
     news: true,
   });
-
   const togglePick = (k: keyof typeof pick) =>
     setPick((p) => ({ ...p, [k]: !p[k] }));
-
-  // Loaded marquee texts
   const [mqTexts, setMqTexts] = useState({
     questions: "",
     reviews: "",
@@ -177,9 +167,19 @@ export default function Dashboard() {
     social: "",
     news: "",
   });
-
-  // Marquee speed seconds (from G12 1–100; higher => slower)
   const [marqueeSec, setMarqueeSec] = useState<number>(80);
+
+  // Drilldown overlay
+  const [showSales, setShowSales] = useState(false);
+  const closeSales = () => setShowSales(false);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeSales();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   function buildUrl() {
     const encoded = encodeURIComponent(`${SHEET_NAME}!${RANGE_LOCAL}`);
@@ -200,122 +200,137 @@ export default function Dashboard() {
         } catch {}
         throw new Error(msg);
       }
-
       const json = await res.json();
       const rows: string[][] = json.values || [];
 
-      // KPI indices (0-based from A2)
+      // KPI rows
       const kpiIdx = [0, 1, 2, 3, 4, 5, 8, 9, 10];
-
       const nextLabels: string[] = [];
       const nextValues: (number | null)[] = [];
       const nextGreens: number[] = [];
       const nextReds: number[] = [];
       const nextUnits: string[] = [];
-      const nextErrors: (string | null)[] = [];
 
       for (let out = 0; out < 9; out++) {
         const r = rows[kpiIdx[out]] || [];
-        const label = (r[0] ?? "").toString().trim();
-        const val = asNumber(r[1]);
-        const gAt = asNumber(r[2]);
-        const rAt = asNumber(r[3]);
-        const unit = (r[5] ?? "").toString().trim(); // <-- column F
-
-        nextLabels.push(label || CONFIG.fallbackLabels[out]);
-        nextValues.push(val);
-        nextGreens.push((gAt as number) ?? CONFIG.defaultGreenAt);
-        nextReds.push((rAt as number) ?? CONFIG.defaultRedAt);
-        nextUnits.push(unit);
-        nextErrors.push(val == null ? "API error" : null);
+        nextLabels.push(
+          (r[0] ?? "").toString().trim() || CONFIG.fallbackLabels[out]
+        );
+        nextValues.push(asNumber(r[1]));
+        nextGreens.push((asNumber(r[2]) as number) ?? CONFIG.defaultGreenAt);
+        nextReds.push((asNumber(r[3]) as number) ?? CONFIG.defaultRedAt);
+        nextUnits.push((r[5] ?? "").toString().trim());
       }
 
-      // Marquee text
+      // Marquee text B8,B9,B15,B16,B17
       const safe = (ri: number) =>
         (rows[ri] && rows[ri][1] ? String(rows[ri][1]) : "") as string;
-
       setMqTexts({
-        questions: safe(6),   // B8
-        reviews: safe(7),     // B9
-        banking: safe(13),    // B15
-        social: safe(14),     // B16
-        news: safe(15),       // B17
+        questions: safe(6),
+        reviews: safe(7),
+        banking: safe(13),
+        social: safe(14),
+        news: safe(15),
       });
 
-      // Speed from G12 (rows[10][6]) mapped to very slow default
-      let raw = rows[10]?.[6] ?? "";
-      const ctl = Math.max(1, Math.min(100, Number(String(raw).replace(/[^\d.-]/g, "")) || 70));
-      // Map 1..100 -> 40s..140s (higher = slower)
-      const speedSec = 40 + (ctl / 100) * 100;
-      setMarqueeSec(speedSec);
+      // Speed from G12 (rows[10][6]) → 40..140s
+      const raw = rows[10]?.[6] ?? "";
+      const ctl = Math.max(
+        1,
+        Math.min(100, Number(String(raw).replace(/[^\d.-]/g, "")) || 70)
+      );
+      setMarqueeSec(40 + (ctl / 100) * 100);
 
       setLabels(nextLabels);
       setValues(nextValues);
       setGreens(nextGreens);
       setReds(nextReds);
       setUnits(nextUnits);
-      setErrors(nextErrors);
+
       setStatus("ok");
       setLastSync(new Date());
     } catch (e: any) {
       setStatus("error");
       setStatusMsg(String(e?.message || e));
-      setErrors(Array(9).fill("API error"));
     }
   }
 
-  // Initial load only (no auto-refresh).
   useEffect(() => {
     load();
   }, []);
+  useEffect(() => {
+    /* hook to switch Day/Week/Month later */
+  }, [rangeView]);
 
   const marqueeCombined = useMemo(() => {
     const parts: string[] = [];
-    if (pick.questions && mqTexts.questions?.trim()) parts.push(mqTexts.questions.trim());
-    if (pick.reviews && mqTexts.reviews?.trim()) parts.push(mqTexts.reviews.trim());
-    if (pick.banking && mqTexts.banking?.trim()) parts.push(mqTexts.banking.trim());
-    if (pick.social && mqTexts.social?.trim()) parts.push(mqTexts.social.trim());
+    if (pick.questions && mqTexts.questions?.trim())
+      parts.push(mqTexts.questions.trim());
+    if (pick.reviews && mqTexts.reviews?.trim())
+      parts.push(mqTexts.reviews.trim());
+    if (pick.banking && mqTexts.banking?.trim())
+      parts.push(mqTexts.banking.trim());
+    if (pick.social && mqTexts.social?.trim())
+      parts.push(mqTexts.social.trim());
     if (pick.news && mqTexts.news?.trim()) parts.push(mqTexts.news.trim());
     return parts.join("   •   ");
   }, [pick, mqTexts]);
 
-  // ———————————————— styles ————————————————
+  // ----------------- styles -----------------
   const styles = {
-    sectionTitle: {
+    /** TOP controls row (centered cluster) */
+    controlsRow: {
       display: "flex",
-      alignItems: "baseline",
+      justifyContent: "center",
+      alignItems: "center",
       gap: 12,
-      fontSize: 28,
-      fontWeight: 800,
-      color: "#fff",
       margin: "16px 0 8px",
+      flexWrap: "wrap" as const,
     } as React.CSSProperties,
-    status: {
-      color: "#9bb0c0",
-      fontSize: 12,
-      fontWeight: 600,
-    } as React.CSSProperties,
-    btn: {
-      padding: "8px 12px",
-      borderRadius: 10,
+    bigBtn: {
+      padding: "10px 16px",
+      borderRadius: 12,
       background: "#214b77",
       color: "#fff",
-      fontWeight: 700,
+      fontWeight: 800,
       border: "none",
       cursor: "pointer",
+      fontSize: 16,
+      boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
     } as React.CSSProperties,
+    viewSwitch: {
+      display: "inline-flex",
+      gap: 6,
+      background: "rgba(255,255,255,0.06)",
+      border: "1px solid rgba(255,255,255,0.1)",
+      borderRadius: 12,
+      padding: 6,
+    } as React.CSSProperties,
+    viewChip: (active: boolean) => ({
+      padding: "8px 12px",
+      borderRadius: 10,
+      fontSize: 14,
+      fontWeight: 800,
+      color: active ? "#0b2540" : "#dbe7f2",
+      background: active ? "#8fd3ff" : "transparent",
+      cursor: "pointer",
+      userSelect: "none" as const,
+    }),
+
     grid: {
       display: "grid",
       gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
       gap: 16,
     } as React.CSSProperties,
-    card: {
-      background: "linear-gradient(#2b2b2b, #252525)",
-      borderRadius: 16,
-      padding: 14,
-      boxShadow: "0 2px 12px rgba(0,0,0,0.25)",
-      color: "#ddd",
-    } as React.CSSProperties,
+    card: (clickable = false) =>
+      ({
+        background: "linear-gradient(#2b2b2b, #252525)",
+        borderRadius: 16,
+        padding: 14,
+        boxShadow: "0 2px 12px rgba(0,0,0,0.25)",
+        color: "#ddd",
+        ...(clickable ? { cursor: "pointer" } : {}),
+      }) as React.CSSProperties,
     kpiBar: (color: string) =>
       ({
         background: color,
@@ -326,24 +341,26 @@ export default function Dashboard() {
         alignItems: "center",
         justifyContent: "center",
         fontWeight: 800,
-        fontSize: 26,
+        fontSize: "clamp(16px, 5.2vw, 28px)", // auto-shrink text inside the bar
         letterSpacing: 0.3,
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "clip",
+        padding: "0 10px",
       }) as React.CSSProperties,
     kpiTitle: { fontSize: 13, fontWeight: 800, color: "#cfd5da", marginBottom: 8 },
-    targets: { marginTop: 10, fontSize: 12, color: "#a0a6ac" },
-    err: { marginTop: 6, fontSize: 12, color: "#ff6868", fontWeight: 600 },
+
     chooserRow: {
-      marginTop: 20,
+      marginTop: 12,
       display: "flex",
-      gap: 14,
+      justifyContent: "center",
+      gap: 10,
       alignItems: "center",
       flexWrap: "wrap" as const,
-      background: "rgba(255,255,255,0.04)",
       padding: "10px 12px",
-      borderRadius: 12,
-      border: "1px solid rgba(255,255,255,0.06)",
+      color: "#d9e2ea",
     },
-    chooseLabel: { color: "#d9e2ea", fontWeight: 700, marginRight: 6 } as React.CSSProperties,
+
     chk: {
       display: "flex",
       alignItems: "center",
@@ -352,28 +369,90 @@ export default function Dashboard() {
       background: "rgba(255,255,255,0.06)",
       borderRadius: 8,
       border: "1px solid rgba(255,255,255,0.08)",
-      color: "#e9f0f6",
       fontSize: 13,
       fontWeight: 600,
       cursor: "pointer",
-      userSelect: "none" as const,
+    },
+
+    /** Bottom status line (centered) */
+    statusLine: {
+      marginTop: 10,
+      textAlign: "center" as const,
+      color: "#9bb0c0",
+      fontSize: 12,
+      fontWeight: 600,
+    },
+
+    overlay: {
+      position: "fixed" as const,
+      inset: 0,
+      background: "rgba(0,0,0,0.55)",
+      zIndex: 99999,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 16,
+    },
+    sheet: {
+      background: "#0d1a24",
+      color: "#e9f3ff",
+      borderRadius: 16,
+      width: "min(960px, 96vw)",
+      maxHeight: "90vh",
+      overflow: "auto",
+      boxShadow: "0 12px 30px rgba(0,0,0,0.45)",
+      border: "1px solid rgba(255,255,255,0.08)",
+    },
+    sheetHead: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      padding: "12px 14px",
+      borderBottom: "1px solid rgba(255,255,255,0.08)",
+    },
+    closeBtn: {
+      background: "rgba(255,255,255,0.1)",
+      border: "none",
+      color: "#fff",
+      borderRadius: 8,
+      padding: "6px 10px",
+      fontWeight: 700,
+      cursor: "pointer",
     },
   };
 
   return (
     <div style={{ padding: 16 }}>
-      {/* Header */}
-      <div style={styles.sectionTitle as React.CSSProperties}>
-        InnoVue Dashboard
-        <span style={styles.status}>
-          {status === "loading" && "Syncing…"}
-          {status === "ok" && `Status: Live • Last Sync: ${lastSync?.toLocaleTimeString() ?? "—"}`}
-          {status === "error" && `Status: Error — ${statusMsg}`}
-        </span>
-        <button style={styles.btn} onClick={load}>Refresh</button>
+      {/* TOP CONTROLS (centered) */}
+      <div style={styles.controlsRow}>
+        <button style={styles.bigBtn} onClick={load}>
+          Refresh
+        </button>
+
+        <div style={styles.viewSwitch}>
+          {(["Day", "Week", "Month"] as const).map((v) => (
+            <div
+              key={v}
+              style={styles.viewChip(rangeView === v)}
+              onClick={() => setRangeView(v)}
+            >
+              {v}
+            </div>
+          ))}
+        </div>
+
+        <button
+          style={styles.bigBtn}
+          onClick={() => {
+            // placeholder hook for Calendar — wire up later
+            alert("Calendar (coming soon)");
+          }}
+        >
+          Calendar
+        </button>
       </div>
 
-      {/* KPI grid (3x3) */}
+      {/* KPI GRID */}
       <div style={styles.grid}>
         {labels.slice(0, 9).map((label, i) => {
           const color = valueToColorByTargets(
@@ -382,52 +461,92 @@ export default function Dashboard() {
             reds[i] ?? CONFIG.defaultRedAt
           );
           const shown = formatByUnit(values[i], units[i]);
+          const isSales = i === 0; // Sales tile triggers drill-down
+
           return (
-            <div key={i} style={styles.card}>
+            <div
+              key={i}
+              style={styles.card(isSales)}
+              onClick={isSales ? () => setShowSales(true) : undefined}
+              role={isSales ? "button" : undefined}
+              tabIndex={isSales ? 0 : undefined}
+              onKeyDown={
+                isSales
+                  ? (e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setShowSales(true);
+                      }
+                    }
+                  : undefined
+              }
+            >
               <div style={styles.kpiTitle}>{label.toUpperCase()}</div>
               <div style={styles.kpiBar(color)}>{shown}</div>
-              <div style={styles.targets}>
-                Green at: {greens[i] ?? CONFIG.defaultGreenAt} • Red at:{" "}
-                {reds[i] ?? CONFIG.defaultRedAt}
-              </div>
-              {errors[i] && <div style={styles.err}>{errors[i]}</div>}
             </div>
           );
         })}
       </div>
 
-      {/* Chooser row (below KPIs, above marquee) */}
-      <div style={styles.chooserRow}>
-        <span style={styles.chooseLabel}>Marquee includes:</span>
+      {/* MARQUEE */}
+      <Marquee text={marqueeCombined} speedSec={marqueeSec} />
 
+      {/* MARQUEE PICKERS (restored, centered) */}
+      <div style={styles.chooserRow}>
+        <span style={{ fontWeight: 800, opacity: 0.9 }}>Marquee includes:</span>
         <label style={styles.chk} onClick={() => togglePick("questions")}>
-          <input type="checkbox" checked={pick.questions} onChange={() => {}} />
+          <input
+            type="checkbox"
+            checked={pick.questions}
+            onChange={() => {}}
+          />
           Questions
         </label>
-
         <label style={styles.chk} onClick={() => togglePick("reviews")}>
           <input type="checkbox" checked={pick.reviews} onChange={() => {}} />
           Reviews
         </label>
-
         <label style={styles.chk} onClick={() => togglePick("banking")}>
           <input type="checkbox" checked={pick.banking} onChange={() => {}} />
           Banking
         </label>
-
         <label style={styles.chk} onClick={() => togglePick("social")}>
           <input type="checkbox" checked={pick.social} onChange={() => {}} />
           Social
         </label>
-
         <label style={styles.chk} onClick={() => togglePick("news")}>
           <input type="checkbox" checked={pick.news} onChange={() => {}} />
           News
         </label>
       </div>
 
-      {/* Single seamless marquee (slow; speed from G12) */}
-      <Marquee text={marqueeCombined} speedSec={marqueeSec} />
+      {/* BOTTOM STATUS LINE */}
+      <div style={styles.statusLine}>
+        {status === "loading" && "Status: Syncing…"}
+        {status === "ok" &&
+          `Status: Live • Last Sync: ${
+            lastSync?.toLocaleTimeString() ?? "—"
+          } • Data Source Health: OK`}
+        {status === "error" &&
+          `Status: Error — ${statusMsg} • Data Source Health: Check API key/limits`}
+      </div>
+
+      {/* Sales Panel Overlay */}
+      {showSales && (
+        <div style={styles.overlay} onClick={closeSales}>
+          <div style={styles.sheet} onClick={(e) => e.stopPropagation()}>
+            <div style={styles.sheetHead}>
+              <strong>Sales • Drill‑down</strong>
+              <button style={styles.closeBtn} onClick={closeSales}>
+                Close
+              </button>
+            </div>
+            <div style={{ padding: 16 }}>
+              <SalesPanel onClose={closeSales} rangeView={rangeView} />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
